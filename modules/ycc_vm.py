@@ -296,6 +296,11 @@ from yandex.cloud.compute.v1.instance_service_pb2 import (
     StopInstanceRequest)
 from yandex.cloud.compute.v1.instance_service_pb2_grpc import \
     InstanceServiceStub
+from yandex.cloud.compute.v1.snapshot_service_pb2_grpc import SnapshotServiceStub
+from yandex.cloud.compute.v1.snapshot_service_pb2 import GetSnapshotRequest
+import grpc
+from grpc._channel import _InactiveRpcError
+
 
 
 def vm_argument_spec():
@@ -327,6 +332,7 @@ def vm_argument_spec():
         max_retries=dict(type='int', required=False, default=5),
         retry_multiplayer=dict(type='int', required=False, default=2))
 
+
 MUTUALLY_EXCLUSIVE = (('state', 'operation'),
                       ('login', 'metadata'),
                       ('metadata', 'public_ssh_key'),
@@ -345,6 +351,7 @@ class YccVM(YC):
         self.instance_service = self.sdk.client(InstanceServiceStub)
         self.disk_service = self.sdk.client(DiskServiceStub)
         self.image_service = self.sdk.client(ImageServiceStub)
+        self.snapshot_service = self.sdk.client(SnapshotServiceStub)
 
 
     def _list_by_name(self, name, folder_id):
@@ -502,7 +509,23 @@ class YccVM(YC):
         metadata = spec.get('metadata')
         labels = spec.get('labels')
 
-        if image_id:
+        if snapshot_id:
+            try:
+                snapshot_id_search = self.snapshot_service.Get(GetSnapshotRequest(snapshot_id=snapshot_id))
+            except _InactiveRpcError:
+                raise ValueError(f"Snapshot with id:{snapshot_id} not found")
+
+            params = dict(
+                folder_id=folder_id,
+                name=name,
+                resources_spec=_get_resource_spec(memory, cores, core_fraction),
+                zone_id=zone_id,
+                platform_id=platform_id,
+                boot_disk_spec=_get_attached_disk_spec(disk_type, disk_size, snapshot_id=snapshot_id),
+                network_interface_specs=_get_network_interface_spec(subnet_id, assign_public_ip)
+            )
+
+        else:
 
             params = dict(
                 folder_id=folder_id,
@@ -514,18 +537,6 @@ class YccVM(YC):
                 network_interface_specs=_get_network_interface_spec(subnet_id, assign_public_ip)
             )
 
-        elif snapshot_id:
-            params = dict(
-                folder_id=folder_id,
-                name=name,
-                resources_spec=_get_resource_spec(memory, cores, core_fraction),
-                zone_id=zone_id,
-                platform_id=platform_id,
-                boot_disk_spec=_get_attached_disk_spec(disk_type, disk_size, snapshot_id=snapshot_id),
-                network_interface_specs=_get_network_interface_spec(subnet_id, assign_public_ip)
-            )
-        else:
-            raise ValueError("Neither Image ID nor Snapshot ID were specified")
         if secondary_disks_spec and secondary_disks_spec[0]:
             params['secondary_disk_specs'] = _get_secondary_disk_specs(secondary_disks_spec)
         if hostname:
@@ -782,7 +793,7 @@ def main():
             response['msg'] = getattr(error, 'details')()
             response['exception'] = traceback.format_exc()
         else:
-            response['msg'] = 'Error during runtime ocurred'
+            response['msg'] = 'Error during runtime occurred'
             response['exception'] = traceback.format_exc()
         module.fail_json(**response)
 
